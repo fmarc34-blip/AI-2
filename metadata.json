@@ -1,0 +1,9 @@
+{
+  "name": "AI-2 Assistant",
+  "description": "A friendly, floating-style AI assistant with voice mode, screen review, and media analysis capabilities.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ]
+}
