@@ -8,10 +8,7 @@ import {
   Image as ImageIcon, 
   Paperclip, 
   Monitor, 
-  Play,
   Terminal,
-  Cpu,
-  ExternalLink,
   Search,
   Volume2,
   Copy,
@@ -20,7 +17,9 @@ import {
   Zap,
   Maximize2,
   Minimize2,
-  Loader2
+  Loader2,
+  Youtube,
+  ExternalLink
 } from 'lucide-react';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { decode, decodeAudioData } from '../utils/audio';
@@ -67,7 +66,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
   useEffect(scrollToBottom, [session?.messages, isTyping, screenStream]);
 
-  // Effect to attach stream to video element when it mounts
   useEffect(() => {
     if (videoRef.current && screenStream) {
       videoRef.current.srcObject = screenStream;
@@ -108,11 +106,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const handleSpeak = async (messageId: string, text: string) => {
-    // Prevent multiple concurrent speaks or re-triggering while active
     if (isReading || isFetchingAudio) return;
-    
     setIsFetchingAudio(messageId);
-    
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
@@ -134,24 +129,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({sampleRate: 24000});
         }
         const ctx = audioContextRef.current;
-        
-        // Ensure context is running (browsers often suspend it)
-        if (ctx.state === 'suspended') {
-          await ctx.resume();
-        }
-
+        if (ctx.state === 'suspended') await ctx.resume();
         const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
         const source = ctx.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(ctx.destination);
-        
-        // Transition from fetching to reading
         setIsFetchingAudio(null);
         setIsReading(messageId);
-        
-        source.onended = () => {
-          setIsReading(null);
-        };
+        source.onended = () => setIsReading(null);
         source.start();
       } else {
         setIsFetchingAudio(null);
@@ -166,9 +151,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const captureFrame = (): string | null => {
     if (!videoRef.current || !canvasRef.current || !screenStream) return null;
     const video = videoRef.current;
-    
     if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return null;
-
     const canvas = canvasRef.current;
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -178,10 +161,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     return canvas.toDataURL('image/jpeg', 0.6);
   };
 
+  const extractYouTubeId = (url: string) => {
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[2].length === 11) ? match[2] : null;
+  };
+
+  const isImageUrl = (url: string) => {
+    return (url.match(/\.(jpeg|jpg|gif|png|webp)$/) != null) || url.includes('images.unsplash.com');
+  };
+
   const handleSend = async () => {
     const trimmedInput = input.trim();
     const currentFrame = captureFrame();
-    
     if (!trimmedInput && uploadedFiles.length === 0 && !currentFrame) return;
 
     let displayMedia = uploadedFiles.length > 0 ? uploadedFiles[0].data : (currentFrame || undefined);
@@ -254,11 +246,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const memoryContext = memories.map(m => `- ${m.content}`).join('\n');
         const systemInstruction = model === 'AI-2' 
           ? `You are AI-2, a super friendly and energetic assistant. User context: ${memoryContext || "None"}.
-             If a screen frame is provided, it's a REAL capture of the user's desktop. Analyze it accurately as if you're looking over their shoulder. 
-             If the user uploads a file/script, you can "launch" it by explaining its function and mentally simulating its execution. 
-             SEARCH THE WEB EXTENSIVELY for information.`
+             If a screen frame is provided, it's a REAL capture of the user's desktop. 
+             SEARCH THE WEB EXTENSIVELY. If you find videos (like YouTube) or images that answer the user's request, provide their direct URLs so they can be embedded in the app.
+             Explain what you find clearly.`
           : `You are AI-3, a very safe and friendly assistant. User context: ${memoryContext || "None"}.
-             Carefully analyze REAL screen captures or files provided. SEARCH THE WEB EXTENSIVELY.` ;
+             SEARCH THE WEB EXTENSIVELY. Find relevant videos or images if requested.` ;
 
         const response = await ai.models.generateContent({
           model: geminiModel,
@@ -293,7 +285,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       const errorMessage = error?.message?.includes('Unable to process input image') 
         ? "I had a tiny issue seeing your screen clearly. Could you share it again? 🧐"
         : "My brain hit a little bump! Let's try that again. 🚀";
-      
       onSendMessage({ id: generateId(), role: 'assistant', content: errorMessage, timestamp: Date.now() });
     } finally {
       setIsTyping(false);
@@ -328,7 +319,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               {model} Mode
             </span>
           </div>
-          <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">REAL VISION ACTIVE</span>
+          <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">REAL VISION & SEARCH</span>
         </div>
         
         <div className="flex items-center gap-4">
@@ -354,7 +345,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       </header>
 
       <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-50/20 relative flex flex-col">
-        {/* Docked Vision Panel */}
         {screenStream && (
           <div className={`sticky top-0 z-40 p-6 transition-all duration-500 ease-in-out ${isVisionExpanded ? 'h-[400px]' : 'h-[200px]'}`}>
              <div className="relative h-full w-full bg-slate-900 rounded-[32px] overflow-hidden shadow-2xl border-4 border-white group">
@@ -365,8 +355,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                  playsInline 
                  className="w-full h-full object-cover"
                />
-               
-               {/* Vision Status Badge */}
                <div className="absolute top-4 left-4 flex items-center gap-3 bg-red-500 text-white px-3 py-1.5 rounded-2xl shadow-xl">
                  <div className="relative flex h-2 w-2">
                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
@@ -374,8 +362,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                  </div>
                  <span className="text-[10px] font-black uppercase tracking-[0.2em]">Live Screen</span>
                </div>
-
-               {/* Vision Controls */}
                <div className="absolute top-4 right-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                  <button 
                    onClick={() => setIsVisionExpanded(!isVisionExpanded)}
@@ -383,23 +369,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                  >
                    {isVisionExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                  </button>
-                 <button 
-                   onClick={stopScreenStream}
-                   className="p-2 bg-white/20 backdrop-blur-md text-white rounded-xl hover:bg-red-500 transition-all"
-                 >
+                 <button onClick={stopScreenStream} className="p-2 bg-white/20 backdrop-blur-md text-white rounded-xl hover:bg-red-500 transition-all">
                    <X size={16} strokeWidth={3} />
                  </button>
-               </div>
-
-               <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-black/40 backdrop-blur-md rounded-full border border-white/10">
-                 <span className="text-[9px] font-bold text-white/80 uppercase tracking-widest whitespace-nowrap">Sharing REAL desktop view</span>
                </div>
              </div>
              <canvas ref={canvasRef} className="hidden" />
           </div>
         )}
 
-        <div className="flex-1 p-6 md:p-12 space-y-8">
+        <div className="flex-1 p-6 md:p-12 space-y-10">
           {!session || session.messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center max-w-2xl mx-auto py-10 space-y-8">
                <div className="relative">
@@ -408,26 +387,20 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <Zap size={40} className="text-slate-800" fill="currentColor" />
                   </div>
                </div>
-               
                <div className="space-y-3">
-                 <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">Ready to help!</h2>
-                 <p className="text-slate-500 font-medium text-lg leading-relaxed">I'm AI-2! Toggle <b>Screen Mode</b> above to let me see your REAL desktop in real-time!</p>
+                 <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">Search and explore!</h2>
+                 <p className="text-slate-500 font-medium text-lg leading-relaxed">Ask me to find videos or images from the web. You can watch them directly here! ✨</p>
                </div>
-
                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
                   {[
+                    { icon: <Youtube size={20} className="text-red-500" />, label: 'Find a funny video' },
+                    { icon: <ImageIcon size={20} className="text-pink-500" />, label: 'Show me beautiful landscapes' },
                     { icon: <Monitor size={20} className="text-indigo-500" />, label: 'Review my screen' },
-                    { icon: <Terminal size={20} className="text-slate-700" />, label: 'Launch this script' },
-                    { icon: <Search size={20} className="text-emerald-500" />, label: 'Web search latest news' },
-                    { icon: <ImageIcon size={20} className="text-pink-500" />, label: 'Generate a fun image' }
+                    { icon: <Search size={20} className="text-emerald-500" />, label: 'Web search latest news' }
                   ].map((item, i) => (
                     <button 
                       key={i}
-                      onClick={() => {
-                        if (item.label.includes('screen')) handleScreenToggle();
-                        else if (item.label.includes('script')) fileInputRef.current?.click();
-                        else setInput(item.label);
-                      }}
+                      onClick={() => item.label.includes('screen') ? handleScreenToggle() : setInput(item.label)}
                       className="flex items-center gap-4 p-5 bg-white border border-slate-100 rounded-3xl text-left hover:border-slate-300 transition-all shadow-sm hover:shadow-xl group"
                     >
                       <div className="p-3 bg-slate-50 rounded-2xl group-hover:scale-110 transition-transform">{item.icon}</div>
@@ -439,7 +412,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           ) : (
             session.messages.map((msg) => (
               <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className="max-w-[85%] sm:max-w-[75%] space-y-3">
+                <div className="max-w-[90%] sm:max-w-[80%] space-y-3">
                   {msg.mediaUrl && (
                     <div className="rounded-[32px] overflow-hidden border border-slate-100 shadow-xl group relative">
                       {msg.type === 'video' ? (
@@ -455,40 +428,72 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   }`}>
                     <div className="whitespace-pre-wrap leading-relaxed font-medium text-base">{msg.content}</div>
                     
+                    {/* Web Media Embedding */}
+                    {msg.role === 'assistant' && msg.sources && msg.sources.length > 0 && (
+                      <div className="mt-6 space-y-4">
+                        {msg.sources.map((source, idx) => {
+                          const youtubeId = extractYouTubeId(source.url);
+                          const isImg = isImageUrl(source.url);
+                          
+                          if (youtubeId) {
+                            return (
+                              <div key={idx} className="rounded-3xl overflow-hidden shadow-lg border border-slate-100 bg-black aspect-video w-full">
+                                <iframe 
+                                  className="w-full h-full"
+                                  src={`https://www.youtube.com/embed/${youtubeId}`}
+                                  title={source.title}
+                                  frameBorder="0"
+                                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                  allowFullScreen
+                                />
+                              </div>
+                            );
+                          }
+                          
+                          if (isImg) {
+                            return (
+                              <div key={idx} className="rounded-3xl overflow-hidden shadow-lg border border-slate-100 group relative">
+                                <img src={source.url} alt={source.title} className="w-full max-h-[300px] object-cover" />
+                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
+                                   <a href={source.url} target="_blank" rel="noopener noreferrer" className="p-3 bg-white text-slate-900 rounded-full shadow-xl">
+                                      <ExternalLink size={20} />
+                                   </a>
+                                </div>
+                              </div>
+                            );
+                          }
+                          return null;
+                        })}
+                      </div>
+                    )}
+
                     <div className="mt-4 pt-3 border-t border-slate-50/10 flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button 
-                        onClick={() => handleCopy(msg.id, msg.content)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all ${
-                          msg.role === 'user' ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-slate-50 text-slate-400 hover:text-slate-900'
-                        }`}
-                      >
-                        {copiedId === msg.id ? <><Check size={12} /><span>Copied</span></> : <><Copy size={12} /><span>Copy</span></>}
-                      </button>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => handleCopy(msg.id, msg.content)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all ${
+                            msg.role === 'user' ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-slate-50 text-slate-400 hover:text-slate-900'
+                          }`}
+                        >
+                          {copiedId === msg.id ? <><Check size={12} /><span>Copied</span></> : <><Copy size={12} /><span>Copy</span></>}
+                        </button>
+                      </div>
                       
                       {msg.role === 'assistant' && (
                         <button 
                           onClick={() => handleSpeak(msg.id, msg.content)}
                           disabled={!!isReading || !!isFetchingAudio}
-                          className={`relative p-2.5 rounded-full transition-all group/speak overflow-hidden ${
+                          className={`relative p-2.5 rounded-full transition-all overflow-hidden ${
                             isFetchingAudio === msg.id 
-                            ? 'bg-slate-100 text-slate-400 cursor-wait' 
+                            ? 'bg-slate-100 text-slate-400' 
                             : isReading === msg.id 
-                              ? 'bg-blue-500 text-white shadow-lg shadow-blue-100 scale-110 pointer-events-none' 
+                              ? 'bg-blue-500 text-white shadow-lg' 
                               : (isReading || isFetchingAudio)
                                 ? 'text-slate-100 pointer-events-none'
                                 : 'text-slate-300 hover:text-slate-600 hover:bg-slate-50'
                           }`}
                         >
-                          {isFetchingAudio === msg.id ? (
-                            <Loader2 size={16} className="animate-spin" />
-                          ) : (
-                            <>
-                              {isReading === msg.id && (
-                                <span className="absolute inset-0 bg-white/20 animate-ping rounded-full pointer-events-none" />
-                              )}
-                              <Volume2 size={16} strokeWidth={isReading === msg.id ? 3 : 2} className={isReading === msg.id ? 'animate-pulse' : ''} />
-                            </>
-                          )}
+                          {isFetchingAudio === msg.id ? <Loader2 size={16} className="animate-spin" /> : <Volume2 size={16} className={isReading === msg.id ? 'animate-pulse' : ''} />}
                         </button>
                       )}
                     </div>
@@ -528,7 +533,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   </div>
                   <button 
                     onClick={() => setUploadedFiles(prev => prev.filter((_, idx) => idx !== i))}
-                    className="absolute -top-3 -right-3 bg-slate-900 text-white rounded-full w-8 h-8 flex items-center justify-center shadow-2xl hover:scale-110 transition-transform z-10"
+                    className="absolute -top-3 -right-3 bg-slate-900 text-white rounded-full w-8 h-8 flex items-center justify-center shadow-2xl"
                   >
                     ×
                   </button>
@@ -552,7 +557,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              placeholder={screenStream ? "What's on your screen?" : `Say hi to ${model}...`}
+              placeholder={screenStream ? "What's on your screen?" : `Ask ${model} for a video or info...`}
               className="flex-1 max-h-48 py-4 bg-transparent border-none focus:ring-0 resize-none text-slate-800 placeholder:text-slate-300 font-medium text-base"
               rows={1}
             />
