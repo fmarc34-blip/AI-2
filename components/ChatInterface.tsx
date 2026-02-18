@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Message, ChatSession, ModelType, MemoryEntry } from '../types';
 import { 
   Plus, 
@@ -15,7 +15,9 @@ import {
   Search,
   Volume2,
   Copy,
-  Check
+  Check,
+  X,
+  Zap
 } from 'lucide-react';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { decode, decodeAudioData } from '../utils/audio';
@@ -44,6 +46,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [isReading, setIsReading] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<{name: string, type: string, data: string}[]>([]);
+  
+  // Screen streaming states
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -55,6 +63,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   useEffect(scrollToBottom, [session?.messages, isTyping]);
 
   const generateId = () => Math.random().toString(36).substr(2, 9);
+
+  const stopScreenStream = useCallback(() => {
+    if (screenStream) {
+      screenStream.getTracks().forEach(track => track.stop());
+      setScreenStream(null);
+    }
+  }, [screenStream]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -121,20 +136,38 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
+  const captureFrame = (): string | null => {
+    if (!videoRef.current || !canvasRef.current || !screenStream) return null;
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.6);
+  };
+
   const handleSend = async () => {
     const trimmedInput = input.trim();
-    if (!trimmedInput && uploadedFiles.length === 0) return;
+    const currentFrame = captureFrame();
+    
+    if (!trimmedInput && uploadedFiles.length === 0 && !currentFrame) return;
+
+    // Build the media components for the user message display
+    let displayMedia = uploadedFiles.length > 0 ? uploadedFiles[0].data : (currentFrame || undefined);
+    let displayType: Message['type'] = uploadedFiles.length > 0 
+        ? (uploadedFiles[0].type.startsWith('image') ? 'image' 
+           : uploadedFiles[0].type.startsWith('video') ? 'video' : 'file') 
+        : (currentFrame ? 'image' : 'text');
 
     const userMsg: Message = {
       id: generateId(),
       role: 'user',
       content: trimmedInput,
       timestamp: Date.now(),
-      mediaUrl: uploadedFiles.length > 0 ? uploadedFiles[0].data : undefined,
-      type: uploadedFiles.length > 0 
-        ? (uploadedFiles[0].type.startsWith('image') ? 'image' 
-           : uploadedFiles[0].type.startsWith('video') ? 'video' : 'file') 
-        : 'text'
+      mediaUrl: displayMedia,
+      type: displayType
     };
 
     onSendMessage(userMsg);
@@ -176,6 +209,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const geminiModel = model === 'AI-2' ? 'gemini-3-flash-preview' : 'gemini-3-pro-preview';
         const contents: any[] = [{ text: currentInput || "Analyze this for me please!" }];
         
+        // Add manual file uploads
         currentMedia.forEach(m => {
           const base64Data = m.data.split(',')[1];
           contents.push({
@@ -186,32 +220,38 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           });
         });
 
+        // Add live screen frame if active
+        if (currentFrame) {
+          contents.push({
+            inlineData: {
+              data: currentFrame.split(',')[1],
+              mimeType: 'image/jpeg'
+            }
+          });
+        }
+
         const memoryContext = memories.map(m => `- ${m.content}`).join('\n');
 
         const systemInstruction = model === 'AI-2' 
-          ? `You are AI-2, a super friendly, fun, and energetic assistant. You use emojis and love helping. 
-             You have an extremely good memory. Here is what you remember about the user:
-             ${memoryContext || "You don't have any specific memories yet."}
-             If files are uploaded, simulate 'launching' them with excitement. Describe the 'output' of the program vividly.
-             SEARCH THE WEB EXTENSIVELY. For almost every query, perform detailed web searches to provide the most up-to-date and accurate info.
-             If you learn something new and important about the user, include it at the end of your response inside a block like this: [MEMORY: user likes ice cream].`
-          : `You are AI-3, a very safe, calm, and ultra-friendly assistant. You prioritize clarity and kindness.
-             You have an extremely good memory. Here is what you remember about the user:
-             ${memoryContext || "You don't have any specific memories yet."}
-             If files are uploaded, carefully 'review' and 'run' them in a safe virtual space and describe the results pleasantly.
-             SEARCH THE WEB EXTENSIVELY. Use your search tools to verify facts and find deep context.
-             If you learn something new and important about the user, include it at the end of your response inside a block like this: [MEMORY: user's cat name is Luna].`;
+          ? `You are AI-2, a super friendly, fun, and energetic assistant. 
+             You have an extremely good memory. User context: ${memoryContext || "None"}.
+             If a screen frame is provided, describe it naturally as if you are watching a video. 
+             SEARCH THE WEB EXTENSIVELY. Perform detailed web searches to provide accurate info.
+             If you learn new user info, use: [MEMORY: ...] tag.`
+          : `You are AI-3, a very safe and friendly assistant. User context: ${memoryContext || "None"}.
+             Provide clear and kind analysis. If you see a screen capture, analyze it safely.
+             SEARCH THE WEB EXTENSIVELY for context. Use: [MEMORY: ...] tag for new facts.`;
 
         const response = await ai.models.generateContent({
           model: geminiModel,
           contents: { parts: contents },
           config: {
-            systemInstruction: systemInstruction + " IMPORTANT: Keep your personality alive! Be safe, fun, and friendly. Do not show raw memory tags to the user.",
+            systemInstruction: systemInstruction + " IMPORTANT: Be fun, friendly, and search the web. Don't mention memory tags directly.",
             tools: [{ googleSearch: {} }]
           }
         });
 
-        let text = response.text || "I'm ready to help! What's on your mind?";
+        let text = response.text || "I'm ready to help!";
         
         // Auto-memory extraction
         const memoryMatch = text.match(/\[MEMORY:\s*(.*?)\]/);
@@ -241,7 +281,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       onSendMessage({
         id: generateId(),
         role: 'assistant',
-        content: "Oh no! My circuits got a bit tangled. Can you try saying that again? I'm still here and excited to help!",
+        content: "Oops! My brain stalled for a second. Let's try again! 🚀",
         timestamp: Date.now()
       });
     } finally {
@@ -249,37 +289,19 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
-  const handleScreenReview = async () => {
+  const handleScreenToggle = async () => {
+    if (screenStream) {
+      stopScreenStream();
+      return;
+    }
+
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-        alert("Screen capture is not supported in this environment.");
-        return;
-      }
-      
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      const video = document.createElement('video');
-      video.srcObject = stream;
-      video.onloadedmetadata = () => {
-        video.play();
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(video, 0, 0);
-        const dataUrl = canvas.toDataURL('image/jpeg');
-        
-        setUploadedFiles(prev => [...prev, {
-          name: 'Screen Review',
-          type: 'image/jpeg',
-          data: dataUrl
-        }]);
-        
-        setInput('What do you think of my screen right now?');
-        stream.getTracks().forEach(t => t.stop());
-      };
-    } catch (err: any) {
-      console.error("Screen capture failed", err);
-      alert("I couldn't access your screen. Please make sure you granted permission!");
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      setScreenStream(stream);
+      stream.getTracks()[0].onended = () => setScreenStream(null);
+    } catch (err) {
+      console.error("Screen stream failed", err);
+      alert("I couldn't access your screen. Please make sure permissions are granted!");
     }
   };
 
@@ -298,11 +320,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         
         <div className="flex items-center gap-4">
           <button 
-            onClick={handleScreenReview}
-            className="flex items-center gap-2 px-4 py-2 hover:bg-slate-50 rounded-xl text-slate-500 hover:text-slate-900 transition-all font-semibold text-sm border border-transparent hover:border-slate-100 shadow-sm hover:shadow-md"
+            onClick={handleScreenToggle}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all font-semibold text-sm border shadow-sm ${
+              screenStream 
+                ? 'bg-blue-600 text-white border-blue-500 animate-pulse' 
+                : 'bg-white text-slate-500 hover:text-slate-900 border-slate-100 hover:border-slate-300'
+            }`}
           >
             <Monitor size={18} />
-            <span className="hidden md:inline">Screen Mode</span>
+            <span className="hidden md:inline">{screenStream ? 'Sharing Screen' : 'Screen Mode'}</span>
           </button>
           <button 
             onClick={() => setIsVoiceMode(true)}
@@ -314,7 +340,33 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-6 md:p-12 space-y-8 custom-scrollbar bg-slate-50/20">
+      <div className="flex-1 overflow-y-auto p-6 md:p-12 space-y-8 custom-scrollbar bg-slate-50/20 relative">
+        {screenStream && (
+          <div className="fixed bottom-32 right-8 z-30 group">
+             <div className="relative w-64 aspect-video bg-black rounded-[24px] overflow-hidden shadow-2xl border-4 border-white animate-in zoom-in-95 duration-500">
+               <video 
+                 ref={videoRef} 
+                 autoPlay 
+                 muted 
+                 playsInline 
+                 srcObject={screenStream as any} 
+                 className="w-full h-full object-cover"
+               />
+               <div className="absolute top-3 left-3 flex items-center gap-2 px-2 py-1 bg-red-500 text-white text-[8px] font-black uppercase rounded-full">
+                  <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
+                  Live Review Active
+               </div>
+               <button 
+                 onClick={stopScreenStream}
+                 className="absolute top-3 right-3 p-1.5 bg-white/20 hover:bg-white/40 text-white rounded-full backdrop-blur-md transition-colors"
+               >
+                 <X size={12} strokeWidth={3} />
+               </button>
+             </div>
+             <canvas ref={canvasRef} className="hidden" />
+          </div>
+        )}
+
         {!session || session.messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center max-w-2xl mx-auto py-20 space-y-8">
              <div className="relative">
@@ -329,20 +381,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
              </div>
              
              <div className="space-y-3">
-               <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">How can I help you?</h2>
-               <p className="text-slate-500 font-medium text-lg">I'm {model}, your friendly AI companion. I remember everything we talk about!</p>
+               <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">Ready for adventure?</h2>
+               <p className="text-slate-500 font-medium text-lg">I'm {model}, your friendly AI. Try <b>Screen Mode</b> to show me your desktop!</p>
              </div>
 
              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
                 {[
-                  { icon: <ImageIcon size={20} className="text-pink-500" />, label: 'Generate a magical forest' },
-                  { icon: <Cpu size={20} className="text-blue-500" />, label: 'Launch this script' },
-                  { icon: <Monitor size={20} className="text-indigo-500" />, label: 'Tell me about my screen' },
-                  { icon: <Search size={20} className="text-emerald-500" />, label: 'Deep web search' }
+                  { icon: <ImageIcon size={20} className="text-pink-500" />, label: 'Generate a robot panda' },
+                  { icon: <Zap size={20} className="text-blue-500" />, label: 'Deep search Paris Olympics' },
+                  { icon: <Monitor size={20} className="text-indigo-500" />, label: 'What is on my screen?' },
+                  { icon: <Search size={20} className="text-emerald-500" />, label: 'Web search latest news' }
                 ].map((item, i) => (
                   <button 
                     key={i}
-                    onClick={() => setInput(item.label)}
+                    onClick={() => {
+                      if (item.label === 'What is on my screen?') handleScreenToggle();
+                      else setInput(item.label);
+                    }}
                     className="flex items-center gap-4 p-5 bg-white border border-slate-100 rounded-3xl text-left hover:border-slate-300 transition-all shadow-sm hover:shadow-xl group"
                   >
                     <div className="p-3 bg-slate-50 rounded-2xl group-hover:scale-110 transition-transform">{item.icon}</div>
@@ -359,22 +414,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   <div className="rounded-[32px] overflow-hidden border border-slate-100 shadow-xl group relative">
                     {msg.type === 'video' ? (
                       <video src={msg.mediaUrl} controls className="w-full max-h-[400px] object-contain bg-black" />
-                    ) : msg.type === 'image' ? (
-                      <img src={msg.mediaUrl} alt="Upload" className="w-full max-h-[500px] object-cover" />
                     ) : (
-                      <div className="p-8 bg-slate-900 flex flex-col items-center justify-center gap-4 text-white">
-                         <div className="w-16 h-16 bg-white/10 rounded-2xl flex items-center justify-center animate-pulse">
-                            <Cpu size={32} className="text-blue-400" />
-                         </div>
-                         <div className="text-center">
-                            <p className="font-bold text-lg">App Environment</p>
-                            <p className="text-xs text-white/50 uppercase tracking-widest font-bold">Virtual Instance Ready</p>
-                         </div>
-                         <button className="flex items-center gap-2 px-4 py-2 bg-blue-600 rounded-full text-xs font-bold hover:bg-blue-500 transition-colors">
-                            <Play size={12} fill="currentColor" />
-                            Launch Remotely
-                         </button>
-                      </div>
+                      <img src={msg.mediaUrl} alt="Upload" className="w-full max-h-[500px] object-cover" />
+                    )}
+                    {msg.content === '' && msg.role === 'user' && (
+                       <div className="absolute inset-0 flex items-center justify-center bg-black/20 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity">
+                         <span className="bg-white/90 px-4 py-2 rounded-full text-xs font-bold text-slate-800 shadow-xl uppercase tracking-widest">Vision Analysis</span>
+                       </div>
                     )}
                   </div>
                 )}
@@ -398,15 +444,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                       }`}
                     >
                       {copiedId === msg.id ? (
-                        <>
-                          <Check size={12} />
-                          <span>Copied</span>
-                        </>
+                        <><Check size={12} /><span>Copied</span></>
                       ) : (
-                        <>
-                          <Copy size={12} />
-                          <span>Copy Message</span>
-                        </>
+                        <><Copy size={12} /><span>Copy</span></>
                       )}
                     </button>
                     
@@ -515,7 +555,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   handleSend();
                 }
               }}
-              placeholder={`Talk to ${model}...`}
+              placeholder={screenStream ? "Sharing screen... Ask me anything about it!" : `Talk to ${model}...`}
               className="flex-1 max-h-48 py-4 bg-transparent border-none focus:ring-0 resize-none text-slate-800 placeholder:text-slate-300 font-medium text-base leading-relaxed"
               rows={1}
             />
@@ -531,9 +571,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               
               <button
                 onClick={handleSend}
-                disabled={!input.trim() && uploadedFiles.length === 0}
+                disabled={!input.trim() && uploadedFiles.length === 0 && !screenStream}
                 className={`p-4 rounded-full transition-all shadow-xl ${
-                  input.trim() || uploadedFiles.length > 0
+                  input.trim() || uploadedFiles.length > 0 || screenStream
                   ? 'bg-slate-900 text-white hover:scale-105 active:scale-95'
                   : 'bg-slate-50 text-slate-200 cursor-not-allowed shadow-none'
                 }`}
