@@ -19,7 +19,8 @@ import {
   X,
   Zap,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Loader2
 } from 'lucide-react';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { decode, decodeAudioData } from '../utils/audio';
@@ -46,6 +47,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [isReading, setIsReading] = useState<string | null>(null);
+  const [isFetchingAudio, setIsFetchingAudio] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<{name: string, type: string, data: string}[]>([]);
   
@@ -106,12 +108,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const handleSpeak = async (messageId: string, text: string) => {
-    if (isReading === messageId) {
-      setIsReading(null);
-      return;
-    }
+    // Prevent multiple concurrent speaks or re-triggering while active
+    if (isReading || isFetchingAudio) return;
     
-    setIsReading(messageId);
+    setIsFetchingAudio(messageId);
+    
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
@@ -133,16 +134,32 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({sampleRate: 24000});
         }
         const ctx = audioContextRef.current;
+        
+        // Ensure context is running (browsers often suspend it)
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+
         const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
         const source = ctx.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(ctx.destination);
-        source.onended = () => setIsReading(null);
+        
+        // Transition from fetching to reading
+        setIsFetchingAudio(null);
+        setIsReading(messageId);
+        
+        source.onended = () => {
+          setIsReading(null);
+        };
         source.start();
+      } else {
+        setIsFetchingAudio(null);
       }
     } catch (err) {
       console.error("TTS failed", err);
       setIsReading(null);
+      setIsFetchingAudio(null);
     }
   };
 
@@ -150,7 +167,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     if (!videoRef.current || !canvasRef.current || !screenStream) return null;
     const video = videoRef.current;
     
-    // Ensure video is ready for capture (4 = HAVE_ENOUGH_DATA)
     if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return null;
 
     const canvas = canvasRef.current;
@@ -452,9 +468,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                       {msg.role === 'assistant' && (
                         <button 
                           onClick={() => handleSpeak(msg.id, msg.content)}
-                          className={`p-2 rounded-full transition-all ${isReading === msg.id ? 'bg-blue-500 text-white animate-pulse' : 'text-slate-300 hover:text-slate-600'}`}
+                          disabled={!!isReading || !!isFetchingAudio}
+                          className={`relative p-2.5 rounded-full transition-all group/speak overflow-hidden ${
+                            isFetchingAudio === msg.id 
+                            ? 'bg-slate-100 text-slate-400 cursor-wait' 
+                            : isReading === msg.id 
+                              ? 'bg-blue-500 text-white shadow-lg shadow-blue-100 scale-110 pointer-events-none' 
+                              : (isReading || isFetchingAudio)
+                                ? 'text-slate-100 pointer-events-none'
+                                : 'text-slate-300 hover:text-slate-600 hover:bg-slate-50'
+                          }`}
                         >
-                          <Volume2 size={14} />
+                          {isFetchingAudio === msg.id ? (
+                            <Loader2 size={16} className="animate-spin" />
+                          ) : (
+                            <>
+                              {isReading === msg.id && (
+                                <span className="absolute inset-0 bg-white/20 animate-ping rounded-full pointer-events-none" />
+                              )}
+                              <Volume2 size={16} strokeWidth={isReading === msg.id ? 3 : 2} className={isReading === msg.id ? 'animate-pulse' : ''} />
+                            </>
+                          )}
                         </button>
                       )}
                     </div>
