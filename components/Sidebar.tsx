@@ -40,10 +40,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="relative w-12 h-12 bg-white rounded-2xl flex items-center justify-center border border-slate-100 shadow-sm overflow-hidden group">
         <div className="absolute inset-0 bg-blue-50/50 group-hover:bg-blue-100/50 transition-colors" />
         <svg viewBox="0 0 24 24" className="w-8 h-8 relative z-10 text-slate-800" fill="none" stroke="currentColor" strokeWidth="1.5">
+          {/* Chatbot Body */}
           <rect x="4" y="8" width="16" height="12" rx="3" />
+          {/* Eyes */}
           <path d="M9 12h.01M15 12h.01" strokeLinecap="round" strokeWidth="2.5" />
-          <path d="M4 11c4-1 12-1 16 0v3c-4-1-12-1-16 0v-3z" fill="slate-800" fillOpacity="0.15" stroke="none" />
-          <path d="M2 13c1 0 2 0 3-1m14 0c1 1 2 1 3 1" />
+          {/* The Mask */}
+          <path d="M4 13.5c4 1 12 1 16 0V15c-4 1-12 1-16 0v-1.5z" fill="slate-800" fillOpacity="0.8" stroke="none" />
+          {/* Antenna */}
+          <path d="M12 8V5m0 0a1 1 0 100-2 1 1 0 000 2z" />
         </svg>
       </div>
       <div>
@@ -97,7 +101,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   }`}
                 >
                   <MessageSquare size={16} className={`shrink-0 ${currentSessionId === s.id ? 'text-blue-500' : 'text-slate-300 group-hover:text-slate-400'}`} />
-                  <span className="truncate">{s.title}</span>
+                  <span className="truncate text-left">{s.title}</span>
                 </button>
               ))
             )}
