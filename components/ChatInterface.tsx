@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Message, ChatSession, ModelType } from '../types';
+import { Message, ChatSession, ModelType, MemoryEntry } from '../types';
 import { 
   Plus, 
   Send, 
@@ -11,9 +11,12 @@ import {
   Play,
   Terminal,
   Cpu,
-  ExternalLink
+  ExternalLink,
+  Search,
+  Volume2
 } from 'lucide-react';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Modality } from '@google/genai';
+import { decode, decodeAudioData } from '../utils/audio';
 
 interface ChatInterfaceProps {
   session?: ChatSession;
@@ -21,6 +24,8 @@ interface ChatInterfaceProps {
   isVoiceMode: boolean;
   setIsVoiceMode: (val: boolean) => void;
   model: ModelType;
+  memories: MemoryEntry[];
+  onAutoMemory: (content: string) => void;
 }
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({
@@ -28,13 +33,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   onSendMessage,
   isVoiceMode,
   setIsVoiceMode,
-  model
+  model,
+  memories,
+  onAutoMemory
 }) => {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [isReading, setIsReading] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<{name: string, type: string, data: string}[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -60,6 +69,47 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       };
       reader.readAsDataURL(file);
     });
+  };
+
+  const handleSpeak = async (messageId: string, text: string) => {
+    if (isReading === messageId) {
+      setIsReading(null);
+      return;
+    }
+    
+    setIsReading(messageId);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: model === 'AI-2' ? 'Kore' : 'Puck' },
+            },
+          },
+        },
+      });
+
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+        if (!audioContextRef.current) {
+          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({sampleRate: 24000});
+        }
+        const ctx = audioContextRef.current;
+        const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(ctx.destination);
+        source.onended = () => setIsReading(null);
+        source.start();
+      }
+    } catch (err) {
+      console.error("TTS failed", err);
+      setIsReading(null);
+    }
   };
 
   const handleSend = async () => {
@@ -127,22 +177,39 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           });
         });
 
+        const memoryContext = memories.map(m => `- ${m.content}`).join('\n');
+
         const systemInstruction = model === 'AI-2' 
           ? `You are AI-2, a super friendly, fun, and energetic assistant. You use emojis and love helping. 
+             You have an extremely good memory. Here is what you remember about the user:
+             ${memoryContext || "You don't have any specific memories yet."}
              If files are uploaded, simulate 'launching' them with excitement. Describe the 'output' of the program vividly.
-             Use search for current events. Be purely conversational.`
+             SEARCH THE WEB EXTENSIVELY. For almost every query, perform detailed web searches to provide the most up-to-date and accurate info.
+             If you learn something new and important about the user, include it at the end of your response inside a block like this: [MEMORY: user likes ice cream].`
           : `You are AI-3, a very safe, calm, and ultra-friendly assistant. You prioritize clarity and kindness.
+             You have an extremely good memory. Here is what you remember about the user:
+             ${memoryContext || "You don't have any specific memories yet."}
              If files are uploaded, carefully 'review' and 'run' them in a safe virtual space and describe the results pleasantly.
-             Use search for current events. Be purely conversational.`;
+             SEARCH THE WEB EXTENSIVELY. Use your search tools to verify facts and find deep context.
+             If you learn something new and important about the user, include it at the end of your response inside a block like this: [MEMORY: user's cat name is Luna].`;
 
         const response = await ai.models.generateContent({
           model: geminiModel,
           contents: { parts: contents },
           config: {
-            systemInstruction: systemInstruction + " IMPORTANT: Keep your personality alive! Be safe, fun, and friendly.",
+            systemInstruction: systemInstruction + " IMPORTANT: Keep your personality alive! Be safe, fun, and friendly. Do not show raw memory tags to the user.",
             tools: [{ googleSearch: {} }]
           }
         });
+
+        let text = response.text || "I'm ready to help! What's on your mind?";
+        
+        // Auto-memory extraction
+        const memoryMatch = text.match(/\[MEMORY:\s*(.*?)\]/);
+        if (memoryMatch && memoryMatch[1]) {
+          onAutoMemory(memoryMatch[1]);
+          text = text.replace(/\[MEMORY:.*?\]/g, '').trim();
+        }
 
         const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
         const sources = groundingChunks?.map((chunk: any) => ({
@@ -153,7 +220,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const aiMsg: Message = {
           id: generateId(),
           role: 'assistant',
-          content: response.text || "I'm ready to help! What's on your mind?",
+          content: text,
           timestamp: Date.now(),
           sources: sources && sources.length > 0 ? sources : undefined
         };
@@ -254,7 +321,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
              
              <div className="space-y-3">
                <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">How can I help you?</h2>
-               <p className="text-slate-500 font-medium text-lg">I'm {model}, your friendly AI companion. I can see, talk, and even try out your files!</p>
+               <p className="text-slate-500 font-medium text-lg">I'm {model}, your friendly AI companion. I remember everything we talk about!</p>
              </div>
 
              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
@@ -262,7 +329,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   { icon: <ImageIcon size={20} className="text-pink-500" />, label: 'Generate a magical forest' },
                   { icon: <Cpu size={20} className="text-blue-500" />, label: 'Launch this script' },
                   { icon: <Monitor size={20} className="text-indigo-500" />, label: 'Tell me about my screen' },
-                  { icon: <Terminal size={20} className="text-emerald-500" />, label: 'Let\'s run an app' }
+                  { icon: <Search size={20} className="text-emerald-500" />, label: 'Deep web search' }
                 ].map((item, i) => (
                   <button 
                     key={i}
@@ -303,7 +370,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   </div>
                 )}
                 
-                <div className={`p-6 rounded-[32px] shadow-sm relative ${
+                <div className={`p-6 rounded-[32px] shadow-sm relative group ${
                   msg.role === 'user' 
                   ? 'bg-slate-900 text-white rounded-tr-none' 
                   : 'bg-white border border-slate-100 text-slate-800 rounded-tl-none'
@@ -312,6 +379,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     {msg.content}
                   </div>
                   
+                  {msg.role === 'assistant' && (
+                    <button 
+                      onClick={() => handleSpeak(msg.id, msg.content)}
+                      className={`absolute -right-12 top-0 p-3 rounded-full transition-all ${isReading === msg.id ? 'bg-blue-500 text-white animate-pulse' : 'bg-white border border-slate-100 text-slate-300 hover:text-slate-600 opacity-0 group-hover:opacity-100 shadow-sm'}`}
+                    >
+                      <Volume2 size={18} />
+                    </button>
+                  )}
+
                   {msg.sources && msg.sources.length > 0 && (
                     <div className="mt-6 pt-6 border-t border-slate-50 space-y-3">
                       <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Sources</p>
@@ -381,7 +457,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </div>
           )}
           
-          <div className="flex items-end gap-4 bg-white border border-slate-100 rounded-[40px] p-3 pl-6 focus-within:ring-8 focus-within:ring-slate-50 shadow-2xl transition-all group">
+          <div className="flex items-end gap-3 bg-white border border-slate-100 rounded-[40px] p-2 pl-6 focus-within:ring-8 focus-within:ring-slate-50 shadow-2xl transition-all group">
             <div className="flex items-center mb-2">
               <input 
                 type="file" 
@@ -412,17 +488,27 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               rows={1}
             />
 
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() && uploadedFiles.length === 0}
-              className={`mb-1 p-4 rounded-full transition-all shadow-xl ${
-                input.trim() || uploadedFiles.length > 0
-                ? 'bg-slate-900 text-white hover:scale-105 active:scale-95'
-                : 'bg-slate-50 text-slate-200 cursor-not-allowed shadow-none'
-              }`}
-            >
-              <Send size={24} />
-            </button>
+            <div className="flex items-center gap-2 mb-1">
+              <button
+                onClick={() => setIsVoiceMode(true)}
+                className="p-4 rounded-full bg-slate-50 text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-all"
+                title="Start Voice Chat"
+              >
+                <Mic size={24} />
+              </button>
+              
+              <button
+                onClick={handleSend}
+                disabled={!input.trim() && uploadedFiles.length === 0}
+                className={`p-4 rounded-full transition-all shadow-xl ${
+                  input.trim() || uploadedFiles.length > 0
+                  ? 'bg-slate-900 text-white hover:scale-105 active:scale-95'
+                  : 'bg-slate-50 text-slate-200 cursor-not-allowed shadow-none'
+                }`}
+              >
+                <Send size={24} />
+              </button>
+            </div>
           </div>
         </div>
       </div>

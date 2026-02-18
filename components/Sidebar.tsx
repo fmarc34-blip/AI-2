@@ -8,7 +8,8 @@ import {
   PanelLeft, 
   Settings,
   ShieldCheck,
-  Zap
+  Zap,
+  BrainCircuit
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -20,6 +21,7 @@ interface SidebarProps {
   onNewChat: () => void;
   currentModel: ModelType;
   onModelChange: (model: ModelType) => void;
+  onEditMemory: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -30,17 +32,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectSession,
   onNewChat,
   currentModel,
-  onModelChange
+  onModelChange,
+  onEditMemory
 }) => {
   const Logo = () => (
     <div className="flex items-center gap-3 p-2 mb-6">
       <div className="relative w-12 h-12 bg-white rounded-2xl flex items-center justify-center border border-slate-100 shadow-sm overflow-hidden group">
-        {/* Chatbot with a Mask */}
         <div className="absolute inset-0 bg-blue-50/50 group-hover:bg-blue-100/50 transition-colors" />
         <svg viewBox="0 0 24 24" className="w-8 h-8 relative z-10 text-slate-800" fill="none" stroke="currentColor" strokeWidth="1.5">
           <rect x="4" y="8" width="16" height="12" rx="3" />
           <path d="M9 12h.01M15 12h.01" strokeLinecap="round" strokeWidth="2.5" />
-          {/* The Mask */}
           <path d="M4 11c4-1 12-1 16 0v3c-4-1-12-1-16 0v-3z" fill="slate-800" fillOpacity="0.15" stroke="none" />
           <path d="M2 13c1 0 2 0 3-1m14 0c1 1 2 1 3 1" />
         </svg>
@@ -104,6 +105,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         <div className="mt-auto pt-6 space-y-3 border-t border-slate-50">
+          <button 
+            onClick={onEditMemory}
+            className="flex items-center gap-3 w-full p-3 text-slate-600 bg-slate-50 hover:bg-slate-100 border border-slate-100 rounded-xl transition-all text-sm font-bold shadow-sm"
+          >
+            <BrainCircuit size={18} className="text-blue-500" />
+            <span>Edit Memory</span>
+          </button>
+
           <div className="bg-slate-50/50 p-3.5 rounded-2xl border border-slate-100">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 text-center">Switch AI Persona</p>
             <div className="flex p-1 bg-white border border-slate-100 rounded-xl gap-1">

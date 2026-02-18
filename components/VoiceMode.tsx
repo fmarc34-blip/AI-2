@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Mic, MicOff, Maximize2, Minimize2, Monitor, Camera } from 'lucide-react';
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
@@ -28,6 +29,12 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const screenStreamRef = useRef<MediaStream | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
+
+  // Transcriptions for saving to history
+  const currentInputTranscription = useRef('');
+  const currentOutputTranscription = useRef('');
+
+  const generateId = () => Math.random().toString(36).substr(2, 9);
 
   const startScreenSharing = async () => {
     try {
@@ -107,6 +114,7 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
             scriptProcessor.connect(inputCtx.destination);
           },
           onmessage: async (message: LiveServerMessage) => {
+            // Handle audio output
             const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (base64Audio) {
               setExpression('happy');
@@ -124,11 +132,42 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
               sourcesRef.current.add(source);
             }
 
+            // Handle transcriptions
+            if (message.serverContent?.outputTranscription) {
+              currentOutputTranscription.current += message.serverContent.outputTranscription.text;
+            } else if (message.serverContent?.inputTranscription) {
+              currentInputTranscription.current += message.serverContent.inputTranscription.text;
+            }
+
+            // Save conversation to history on turn complete
+            if (message.serverContent?.turnComplete) {
+              if (currentInputTranscription.current.trim()) {
+                onMessageResponse({
+                  id: generateId(),
+                  role: 'user',
+                  content: currentInputTranscription.current.trim(),
+                  timestamp: Date.now()
+                });
+              }
+              if (currentOutputTranscription.current.trim()) {
+                onMessageResponse({
+                  id: generateId(),
+                  role: 'assistant',
+                  content: currentOutputTranscription.current.trim(),
+                  timestamp: Date.now()
+                });
+              }
+              currentInputTranscription.current = '';
+              currentOutputTranscription.current = '';
+            }
+
             if (message.serverContent?.interrupted) {
               sourcesRef.current.forEach(s => s.stop());
               sourcesRef.current.clear();
               nextStartTimeRef.current = 0;
               setExpression('listening');
+              // Clear pending transcriptions on interrupt
+              currentOutputTranscription.current = '';
             }
           },
           onerror: (e) => {
@@ -139,12 +178,14 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
         },
         config: {
           responseModalities: [Modality.AUDIO],
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
           systemInstruction: `You are ${model}, a fun and friendly AI. You are talking to the user.
           If they share their screen, you can see it and comment on it. 
           Be cheerful, use short conversational phrases. Your face is a colorful blob.
           IMPORTANT: Never speak URLs, links, or mention where you got your information from. Stay conversational and friendly without mentioning search sources or citations.`,
           speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: model === 'AI-2' ? 'Kore' : 'Puck' } }
           }
         }
       });
@@ -153,7 +194,7 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
     } catch (err) {
       console.error("Voice setup failed", err);
     }
-  }, [isMuted, model]);
+  }, [isMuted, model, onMessageResponse]);
 
   useEffect(() => {
     setupLiveSession();

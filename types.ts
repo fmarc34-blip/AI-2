@@ -1,6 +1,12 @@
 
 export type ModelType = 'AI-2' | 'AI-3';
 
+export interface MemoryEntry {
+  id: string;
+  content: string;
+  timestamp: number;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';

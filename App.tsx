@@ -1,9 +1,10 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatInterface } from './components/ChatInterface';
 import { VoiceMode } from './components/VoiceMode';
-import { ChatSession, Message, ModelType } from './types';
+import { MemoryEditor } from './components/MemoryEditor';
+import { ChatSession, Message, ModelType, MemoryEntry } from './types';
 import { v4 as uuidv4 } from 'uuid';
 
 const App: React.FC = () => {
@@ -11,26 +12,35 @@ const App: React.FC = () => {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isVoiceMode, setIsVoiceMode] = useState(false);
+  const [isMemoryOpen, setIsMemoryOpen] = useState(false);
   const [currentModel, setCurrentModel] = useState<ModelType>('AI-2');
+  const [memories, setMemories] = useState<MemoryEntry[]>([]);
 
-  // Load history
+  // Load history and memories
   useEffect(() => {
-    const saved = localStorage.getItem('ai2_sessions');
-    if (saved) {
+    const savedSessions = localStorage.getItem('ai2_sessions');
+    if (savedSessions) {
       try {
-        const parsed = JSON.parse(saved);
+        const parsed = JSON.parse(savedSessions);
         setSessions(parsed);
         if (parsed.length > 0) setCurrentSessionId(parsed[0].id);
-      } catch (e) {
-        console.error("Failed to parse history", e);
-      }
+      } catch (e) { console.error(e); }
+    }
+
+    const savedMemories = localStorage.getItem('ai2_memories');
+    if (savedMemories) {
+      try { setMemories(JSON.parse(savedMemories)); } catch (e) { console.error(e); }
     }
   }, []);
 
-  // Save history
+  // Save changes
   useEffect(() => {
     localStorage.setItem('ai2_sessions', JSON.stringify(sessions));
   }, [sessions]);
+
+  useEffect(() => {
+    localStorage.setItem('ai2_memories', JSON.stringify(memories));
+  }, [memories]);
 
   const createNewChat = () => {
     const newSession: ChatSession = {
@@ -71,6 +81,10 @@ const App: React.FC = () => {
     }));
   };
 
+  const handleUpdateMemory = (newMemories: MemoryEntry[]) => {
+    setMemories(newMemories);
+  };
+
   return (
     <div className="flex h-screen bg-white text-slate-800">
       <Sidebar
@@ -82,15 +96,21 @@ const App: React.FC = () => {
         onNewChat={createNewChat}
         currentModel={currentModel}
         onModelChange={setCurrentModel}
+        onEditMemory={() => setIsMemoryOpen(true)}
       />
       
-      <main className={`flex-1 flex flex-col relative transition-all duration-300 ${isSidebarOpen ? 'ml-0' : 'ml-0'}`}>
+      <main className="flex-1 flex flex-col relative overflow-hidden">
         <ChatInterface
           session={currentSession}
           onSendMessage={addMessage}
           isVoiceMode={isVoiceMode}
           setIsVoiceMode={setIsVoiceMode}
           model={currentModel}
+          memories={memories}
+          onAutoMemory={(content) => {
+            const newEntry: MemoryEntry = { id: uuidv4(), content, timestamp: Date.now() };
+            setMemories(prev => [newEntry, ...prev]);
+          }}
         />
         
         {isVoiceMode && (
@@ -98,6 +118,14 @@ const App: React.FC = () => {
             onClose={() => setIsVoiceMode(false)}
             model={currentModel}
             onMessageResponse={addMessage}
+          />
+        )}
+
+        {isMemoryOpen && (
+          <MemoryEditor 
+            memories={memories} 
+            onUpdate={handleUpdateMemory} 
+            onClose={() => setIsMemoryOpen(false)} 
           />
         )}
       </main>
