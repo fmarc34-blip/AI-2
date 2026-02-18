@@ -13,7 +13,9 @@ import {
   Cpu,
   ExternalLink,
   Search,
-  Volume2
+  Volume2,
+  Copy,
+  Check
 } from 'lucide-react';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { decode, decodeAudioData } from '../utils/audio';
@@ -40,6 +42,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [isReading, setIsReading] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<{name: string, type: string, data: string}[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -69,6 +72,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       };
       reader.readAsDataURL(file);
     });
+  };
+
+  const handleCopy = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
   const handleSpeak = async (messageId: string, text: string) => {
@@ -370,7 +379,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   </div>
                 )}
                 
-                <div className={`p-6 rounded-[32px] shadow-sm relative group ${
+                <div className={`p-6 pb-4 rounded-[32px] shadow-sm relative group ${
                   msg.role === 'user' 
                   ? 'bg-slate-900 text-white rounded-tr-none' 
                   : 'bg-white border border-slate-100 text-slate-800 rounded-tl-none'
@@ -379,14 +388,37 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     {msg.content}
                   </div>
                   
-                  {msg.role === 'assistant' && (
+                  <div className="mt-4 pt-3 border-t border-slate-50/10 flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity">
                     <button 
-                      onClick={() => handleSpeak(msg.id, msg.content)}
-                      className={`absolute -right-12 top-0 p-3 rounded-full transition-all ${isReading === msg.id ? 'bg-blue-500 text-white animate-pulse' : 'bg-white border border-slate-100 text-slate-300 hover:text-slate-600 opacity-0 group-hover:opacity-100 shadow-sm'}`}
+                      onClick={() => handleCopy(msg.id, msg.content)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all ${
+                        msg.role === 'user' 
+                        ? 'bg-white/10 text-white hover:bg-white/20' 
+                        : 'bg-slate-50 text-slate-400 hover:text-slate-900'
+                      }`}
                     >
-                      <Volume2 size={18} />
+                      {copiedId === msg.id ? (
+                        <>
+                          <Check size={12} />
+                          <span>Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={12} />
+                          <span>Copy Message</span>
+                        </>
+                      )}
                     </button>
-                  )}
+                    
+                    {msg.role === 'assistant' && (
+                      <button 
+                        onClick={() => handleSpeak(msg.id, msg.content)}
+                        className={`p-2 rounded-full transition-all ${isReading === msg.id ? 'bg-blue-500 text-white animate-pulse' : 'text-slate-300 hover:text-slate-600'}`}
+                      >
+                        <Volume2 size={14} />
+                      </button>
+                    )}
+                  </div>
 
                   {msg.sources && msg.sources.length > 0 && (
                     <div className="mt-6 pt-6 border-t border-slate-50 space-y-3">
