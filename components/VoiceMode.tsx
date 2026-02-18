@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Mic, MicOff, Maximize2, Minimize2, Monitor, Camera } from 'lucide-react';
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
-import { BlobFace } from './BlobFace';
+import { VoiceVisualizer } from './VoiceVisualizer';
 import { Expression, ModelType, Message } from '../types';
 import { encode, decode, decodeAudioData, createAudioBlob } from '../utils/audio';
 
@@ -21,6 +21,7 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
@@ -30,15 +31,26 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
   const screenStreamRef = useRef<MediaStream | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
 
-  // Transcriptions for saving to history
   const currentInputTranscription = useRef('');
   const currentOutputTranscription = useRef('');
 
   const generateId = () => Math.random().toString(36).substr(2, 9);
 
   const startScreenSharing = async () => {
+    setShareError(null);
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      if (!window.isSecureContext) {
+        throw new Error("Screen sharing requires a secure context (HTTPS).");
+      }
+      
+      const stream = await navigator.mediaDevices.getDisplayMedia({ 
+        video: {
+          displaySurface: 'monitor',
+          cursor: 'always'
+        } as any,
+        audio: false 
+      });
+
       screenStreamRef.current = stream;
       setIsScreenSharing(true);
       
@@ -50,7 +62,7 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
       const ctx = canvas.getContext('2d');
 
       frameIntervalRef.current = window.setInterval(() => {
-        if (!ctx || !videoEl.videoWidth) return;
+        if (!ctx || !videoEl.videoWidth || !sessionRef.current) return;
         canvas.width = videoEl.videoWidth;
         canvas.height = videoEl.videoHeight;
         ctx.drawImage(videoEl, 0, 0);
@@ -69,8 +81,14 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
       }, 1000 / FRAME_RATE);
 
       stream.getVideoTracks()[0].onended = () => stopScreenSharing();
-    } catch (err) {
-      console.error("Screen sharing failed", err);
+    } catch (err: any) {
+      console.error("Screen sharing failed:", err);
+      if (err.name === 'NotAllowedError' || err.message?.includes('Permission denied')) {
+        setShareError("Permission denied. Please allow screen access to use this feature.");
+      } else {
+        setShareError("Screen sharing failed. Please ensure you are using a supported browser.");
+      }
+      setIsScreenSharing(false);
     }
   };
 
@@ -78,6 +96,7 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
     if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
     if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach(t => t.stop());
     setIsScreenSharing(false);
+    setShareError(null);
   };
 
   const setupLiveSession = useCallback(async () => {
@@ -114,7 +133,6 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
             scriptProcessor.connect(inputCtx.destination);
           },
           onmessage: async (message: LiveServerMessage) => {
-            // Handle audio output
             const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (base64Audio) {
               setExpression('happy');
@@ -132,14 +150,12 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
               sourcesRef.current.add(source);
             }
 
-            // Handle transcriptions
             if (message.serverContent?.outputTranscription) {
               currentOutputTranscription.current += message.serverContent.outputTranscription.text;
             } else if (message.serverContent?.inputTranscription) {
               currentInputTranscription.current += message.serverContent.inputTranscription.text;
             }
 
-            // Save conversation to history on turn complete
             if (message.serverContent?.turnComplete) {
               if (currentInputTranscription.current.trim()) {
                 onMessageResponse({
@@ -162,11 +178,12 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
             }
 
             if (message.serverContent?.interrupted) {
-              sourcesRef.current.forEach(s => s.stop());
+              sourcesRef.current.forEach(s => {
+                try { s.stop(); } catch(e) {}
+              });
               sourcesRef.current.clear();
               nextStartTimeRef.current = 0;
               setExpression('listening');
-              // Clear pending transcriptions on interrupt
               currentOutputTranscription.current = '';
             }
           },
@@ -181,8 +198,8 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           systemInstruction: `You are ${model}, a fun and friendly AI. You are talking to the user.
-          If they share their screen, you can see it and comment on it. 
-          Be cheerful, use short conversational phrases. Your face is a colorful blob.
+          If they share their screen, you can see it and comment on it. SEARCH THE WEB EXTENSIVELY for all current info.
+          Be cheerful, use short conversational phrases. You are a helpful companion.
           IMPORTANT: Never speak URLs, links, or mention where you got your information from. Stay conversational and friendly without mentioning search sources or citations.`,
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: model === 'AI-2' ? 'Kore' : 'Puck' } }
@@ -199,9 +216,9 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
   useEffect(() => {
     setupLiveSession();
     return () => {
-      sessionRef.current?.close();
-      audioContextRef.current?.close();
-      outputAudioContextRef.current?.close();
+      sessionRef.current?.close?.();
+      audioContextRef.current?.close?.();
+      outputAudioContextRef.current?.close?.();
       stopScreenSharing();
     };
   }, []);
@@ -235,15 +252,22 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({ onClose, model, onMessageR
                 <span className="text-[10px] font-bold text-blue-600 uppercase">Streaming Desktop</span>
               </div>
            )}
-           <BlobFace expression={expression} size={isFullscreen ? 500 : 320} />
+
+           <VoiceVisualizer expression={expression} size={isFullscreen ? 500 : 320} />
            
            <div className="text-center space-y-4 max-w-lg">
               <h2 className="text-4xl font-black text-slate-900 tracking-tight">
-                {expression === 'listening' ? "I'm all ears!" : expression === 'happy' ? "Let's chat!" : expression === 'thinking' ? "Processing..." : "Ready to Talk"}
+                {expression === 'listening' ? "I'm all ears!" : expression === 'happy' ? "Let's chat!" : expression === 'thinking' ? "Searching..." : "Ready to Talk"}
               </h2>
-              <p className="text-slate-400 font-semibold text-lg leading-relaxed">
-                {isScreenSharing ? "I can see your screen now! Tell me what to look at." : "Talk to me naturally. I can help with anything!"}
-              </p>
+              {shareError ? (
+                <p className="text-red-500 font-bold text-lg leading-relaxed animate-in shake">
+                  {shareError}
+                </p>
+              ) : (
+                <p className="text-slate-400 font-semibold text-lg leading-relaxed">
+                  {isScreenSharing ? "I can see your screen now! Tell me what to look at." : "Talk to me naturally. I can help with anything!"}
+                </p>
+              )}
            </div>
         </div>
 
