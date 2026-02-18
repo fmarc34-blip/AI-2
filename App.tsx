@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar';
 import { ChatInterface } from './components/ChatInterface';
 import { VoiceMode } from './components/VoiceMode';
 import { MemoryEditor } from './components/MemoryEditor';
+import { HelpModal } from './components/HelpModal';
 import { ChatSession, Message, ModelType, MemoryEntry } from './types';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -13,8 +14,21 @@ const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [isMemoryOpen, setIsMemoryOpen] = useState(false);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [currentModel, setCurrentModel] = useState<ModelType>('AI-2');
   const [memories, setMemories] = useState<MemoryEntry[]>([]);
+
+  // F1 Help Listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F1') {
+        e.preventDefault();
+        setIsHelpOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Load history and memories
   useEffect(() => {
@@ -127,6 +141,10 @@ const App: React.FC = () => {
             onUpdate={handleUpdateMemory} 
             onClose={() => setIsMemoryOpen(false)} 
           />
+        )}
+
+        {isHelpOpen && (
+          <HelpModal onClose={() => setIsHelpOpen(false)} />
         )}
       </main>
     </div>
